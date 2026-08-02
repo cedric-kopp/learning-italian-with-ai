@@ -1,0 +1,28 @@
+[project]
+name = "tutore"
+version = "0.1.0"
+description = "Local voice-based Italian tutor (STT -> LLM -> TTS), fully open-weight on Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    "python-dotenv>=1.0",
+    "openai>=1.55",
+    "sqlmodel>=0.0.22",
+    "mlx-whisper>=0.4.2",
+    "kokoro>=0.9.4",
+    "soundfile>=0.12",
+    "numpy>=1.26,<2.3",
+]
+
+[tool.uv]
+# Torch + MLX wheels resolve fine on macOS arm64 / py3.12.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tutore"]
