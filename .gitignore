@@ -6,3 +6,9 @@ data/*.db
 data/*.db-*
 .DS_Store
 uploads/
+# Personal, per-instance vocab (recreated on first run) — not part of the repo.
+known_vocab.csv
+italian_vocab.csv
+# One-off, user-specific vocab import/cleanup scripts (kept locally, not shared).
+scripts/finalize_known_vocab.py
+scripts/import_known_vocab.py
