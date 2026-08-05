@@ -70,7 +70,7 @@ def run_turn(
         model=LLM.model,
         messages=messages,
         temperature=0.4,  # lower -> steadier, fewer invented corrections
-        max_tokens=500,
+        max_tokens=800,  # room for English-teacher explanations without truncation
     )
     # Qwen3 defaults to emitting a long hidden reasoning trace (~30s/turn on this
     # hardware). reasoning_effort="none" fully turns it off — measured 40s -> ~2s.
@@ -109,12 +109,47 @@ def _create_resilient(kwargs: dict[str, Any]):
     return _client.chat.completions.create(**kwargs)
 
 
+_FIELD_LABEL_RE = re.compile(
+    r"""(?im)^\s*["']?(reply[_ ]?lang|corrections?|new[_ ]?vocab|detected[_ ]?level|reply)["']?\s*[:=]""",
+)
+
+
+def _is_degenerate_reply(reply: str) -> bool:
+    """True if the 'reply' is actually a leaked field label / metadata (a small
+    model occasionally emits e.g. 'Replylang: en' as the reply value)."""
+    r = reply.strip()
+    if len(r) < 3 or r.lower() in {"en", "it", "…"}:
+        return True
+    return bool(re.match(r"(?i)^(reply)?[_ ]?lang\b|^detected[_ ]?level\b", r))
+
+
+def _salvage_reply(content: str) -> str:
+    """Recover a spoken reply from broken/partial JSON: prefer the "reply" value,
+    else strip JSON syntax + field-label lines and keep the prose."""
+    text = _strip_think(content)
+    m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
+    if m:
+        try:
+            return _demarkdown(json.loads('"' + m.group(1) + '"'))
+        except Exception:
+            return _demarkdown(m.group(1))
+    lines = []
+    for ln in text.splitlines():
+        s = ln.strip().strip(",")
+        if not s or re.fullmatch(r"[\{\}\[\]]+", s) or _FIELD_LABEL_RE.match(s):
+            continue
+        lines.append(ln.strip())
+    return _demarkdown(" ".join(lines))
+
+
 def _parse_turn(content: str, fallback_lang: str) -> TurnResult:
+    default = (
+        "Scusa, puoi ripetere?" if fallback_lang == "it" else "Sorry, could you say that again?"
+    )
     data = _extract_json(content)
     if data is None:
-        # Never hard-fail the conversation — speak whatever text we got.
-        cleaned = _strip_think(content).strip() or "Scusa, non ho capito. Puoi ripetere?"
-        return TurnResult(reply=cleaned, reply_lang=fallback_lang, raw=content)
+        # Broken JSON — salvage a clean reply, never show raw field labels.
+        return TurnResult(reply=_salvage_reply(content) or default, reply_lang=fallback_lang, raw=content)
 
     corrections = [
         Correction(
@@ -135,8 +170,12 @@ def _parse_turn(content: str, fallback_lang: str) -> TurnResult:
         for v in data.get("new_vocab", []) or []
         if isinstance(v, dict) and str(v.get("italian", "")).strip()
     ]
+    reply = _demarkdown(data.get("reply", ""))
+    if _is_degenerate_reply(reply):
+        salvaged = _salvage_reply(content)
+        reply = salvaged if salvaged and not _is_degenerate_reply(salvaged) else default
     return TurnResult(
-        reply=_demarkdown(data.get("reply", "")) or "…",
+        reply=reply,
         reply_lang=str(data.get("reply_lang", fallback_lang)).strip() or fallback_lang,
         corrections=corrections,
         new_vocab=new_vocab,

@@ -12,6 +12,7 @@ else
 fi
 
 echo "==> Python env (uv, pinned to 3.12)"
+# Installs deps incl. the spaCy Italian model (pinned as a URL dep in pyproject).
 uv sync
 
 echo "==> .env"

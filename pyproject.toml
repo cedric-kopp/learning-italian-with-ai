@@ -15,6 +15,11 @@ dependencies = [
     "kokoro>=0.9.4",
     "soundfile>=0.12",
     "numpy>=1.26,<2.3",
+    # Italian lemmatization/POS for flashcard vocab extraction. The model is pinned
+    # as a URL dep so `uv sync` installs AND keeps it (a plain `spacy download`
+    # gets pruned on the next sync).
+    "spacy>=3.8",
+    "it-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl",
 ]
 
 [tool.uv]
@@ -26,3 +31,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["tutore"]
+
+[tool.hatch.metadata]
+# Allow the spaCy model pinned as a direct URL dependency.
+allow-direct-references = true

@@ -211,3 +211,88 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
 }
+
+// ---- Anki panel ----
+const ankiPanel = $("#ankiPanel");
+$("#ankiBtn").addEventListener("click", async () => {
+  ankiPanel.showModal();
+  await refreshAnki();
+});
+
+async function refreshAnki() {
+  const dot = $("#ankiDot");
+  const statusEl = $("#ankiStatus");
+  try {
+    const s = await (await fetch("/api/anki/status")).json();
+    const deckSel = $("#deck");
+    deckSel.innerHTML = "";
+    (s.decks || []).forEach((d) => {
+      const o = document.createElement("option");
+      o.value = o.textContent = d;
+      deckSel.appendChild(o);
+    });
+    // Ensure the default deck is selectable even if it doesn't exist yet.
+    if (![...deckSel.options].some((o) => o.value === s.default_deck)) {
+      const o = document.createElement("option");
+      o.value = o.textContent = s.default_deck + " (will be created)";
+      o.dataset.real = s.default_deck;
+      deckSel.appendChild(o);
+    }
+    if (s.available) {
+      dot.className = "dot on";
+      statusEl.className = "anki-status on";
+      statusEl.textContent = "✓ Anki connected";
+    } else {
+      dot.className = "dot off";
+      statusEl.className = "anki-status off";
+      statusEl.textContent = "Anki not detected — open Anki desktop with the AnkiConnect add-on to push cards.";
+    }
+  } catch {
+    dot.className = "dot off";
+    statusEl.textContent = "Could not reach the server.";
+  }
+}
+// Reflect Anki status on the topbar dot at load.
+refreshAnki();
+
+function chosenDeck() {
+  const sel = $("#deck");
+  const typed = $("#deckNew").value.trim();
+  if (typed) return typed;
+  const opt = sel.selectedOptions[0];
+  return opt ? (opt.dataset.real || opt.value) : "";
+}
+
+$("#genCards").addEventListener("click", async () => {
+  const btn = $("#genCards");
+  const out = $("#genResult");
+  btn.disabled = true;
+  out.textContent = "Handing off to the big model (qwen3:14b) to craft cards… this can take a bit.";
+  try {
+    const res = await fetch("/api/cards/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deck: chosenDeck() || undefined, session_id: state.sessionId }),
+    });
+    const data = await res.json();
+    out.textContent = data.message || `Generated ${data.generated}, pushed ${data.pushed}.`;
+    await refreshAnki();
+  } catch (err) {
+    out.textContent = "Error: " + (err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#importVocab").addEventListener("click", async () => {
+  const out = $("#importResult");
+  const fd = new FormData();
+  fd.append("text", $("#knownVocab").value);
+  try {
+    const data = await (await fetch("/api/vocab/import", { method: "POST", body: fd })).json();
+    out.textContent = `Imported ${data.added} new, ${data.skipped} already known.`;
+    $("#knownVocab").value = "";
+  } catch (err) {
+    out.textContent = "Error: " + (err.message || err);
+  }
+});

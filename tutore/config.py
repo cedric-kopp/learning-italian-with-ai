@@ -59,3 +59,11 @@ HOST = _get("HOST", "127.0.0.1")
 PORT = int(_get("PORT", "8770"))
 
 DB_PATH = ROOT / _get("DB_PATH", "data/tutore.db")
+
+# --- Anki flashcards (Phase 2) ---
+# Bigger model used ONLY for the batch card-generation handoff at session end
+# (latency irrelevant there). Chat still uses the fast LLM above.
+CARD_MODEL = _get("CARD_MODEL", "qwen3:14b")
+ANKI_CONNECT_URL = _get("ANKI_CONNECT_URL", "http://127.0.0.1:8765")
+ANKI_DECK = _get("ANKI_DECK", "Tutore Italian")
+ANKI_TAGS = [t.strip() for t in _get("ANKI_TAGS", "tutore,italian").split(",") if t.strip()]

@@ -12,8 +12,44 @@
       <span class="flag" aria-hidden="true"></span>
       <h1>Tutore</h1>
     </div>
-    <div class="backend" id="backend" title="Active LLM backend">…</div>
+    <div class="topbar-right">
+      <div class="backend" id="backend" title="Active LLM backend">…</div>
+      <button id="ankiBtn" class="anki-btn" title="Anki flashcards">
+        <span class="dot" id="ankiDot" aria-hidden="true"></span> 🗂 Anki
+      </button>
+    </div>
   </header>
+
+  <dialog id="ankiPanel" class="panel">
+    <form method="dialog" class="panel-head">
+      <h2>🗂 Anki flashcards</h2>
+      <button class="x" aria-label="Close">✕</button>
+    </form>
+
+    <section class="panel-sec">
+      <div class="anki-status" id="ankiStatus">Checking Anki…</div>
+      <label for="deck">Deck</label>
+      <div class="row">
+        <select id="deck"></select>
+        <input id="deckNew" type="text" placeholder="or type a new deck name" />
+      </div>
+      <button id="genCards" class="primary">End session → create cards</button>
+      <div class="muted" id="genResult"></div>
+    </section>
+
+    <section class="panel-sec">
+      <h3>Import known vocabulary</h3>
+      <p class="muted">
+        Paste Italian words you already know (one per line or comma-separated).
+        The tutor won't re-teach them and won't turn them into cards.
+      </p>
+      <textarea id="knownVocab" rows="5" placeholder="ciao&#10;la casa&#10;mangiare, bello"></textarea>
+      <div class="row">
+        <button id="importVocab">Import list</button>
+        <span class="muted" id="importResult"></span>
+      </div>
+    </section>
+  </dialog>
 
   <section class="controls">
     <div class="control">

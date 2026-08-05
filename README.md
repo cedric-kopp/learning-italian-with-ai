@@ -16,10 +16,28 @@ check (if Whisper mishears you, an Italian might too).
 - 🎚️ **Level (A1–B1) + voice-speed** dials.
 - 🔄 **Swappable brain:** run **Ollama** or **MLX** with one env var — identical UX.
 - 🧠 **Memory foundation:** every turn saves new vocab + your mistakes to SQLite
-  (the base the SRS deck, mistake ledger, scenarios, grammar lab & dashboard build on).
+  (the base the mistake ledger, scenarios, grammar lab & dashboard build on).
 
-> Roadmap (next phases): vocab SRS + upload/known-vocab ingest → Erasmus scenario
-> role-plays → grammar lab → pronunciation drills → progress dashboard.
+## What Phase 2 adds — Anki flashcards 🗂
+
+- 🃏 **Session-end card generation** — the "🗂 Anki" panel's *"End session → create
+  cards"* hands your session's new vocabulary to a bigger model (**qwen3:14b**),
+  which writes proper cards: Italian front (with article for gender), **German**
+  back + part of speech + an example sentence.
+- 🔗 **Live push to Anki** via the **AnkiConnect** add-on — cards land straight in
+  your chosen deck. Note ids are saved so re-running never duplicates; if Anki is
+  closed, cards are held and pushed on your next click (no regeneration).
+- 📥 **Italian-only known-vocab import** — paste words you already know; the tutor
+  stops re-teaching them and won't turn them into cards.
+
+### Anki setup (one-time)
+1. Install the **AnkiConnect** add-on: Anki → *Tools → Add-ons → Get Add-ons* →
+   code **`2055492159`** → restart Anki.
+2. Keep **Anki desktop open** when you push cards. Default deck is *Tutore Italian*
+   (change via `ANKI_DECK` in `.env` or the deck picker).
+
+> Roadmap (next phases): Erasmus scenario role-plays → grammar lab →
+> pronunciation drills → progress dashboard.
 
 ## Requirements
 

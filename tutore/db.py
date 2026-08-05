@@ -65,12 +65,19 @@ class Vocab(SQLModel, table=True):
     example: str = ""
     source: str = "conversation"  # "conversation" | "upload" | "manual"
     created_at: dt.datetime = Field(default_factory=_now)
-    # SM-2 fields
+    # SM-2 fields (retained; scheduling now handled by Anki, so unused for review)
     ease: float = 2.5
     interval_days: float = 0.0
     reps: int = 0
     lapses: int = 0
     due_at: dt.datetime = Field(default_factory=_now)
+    # Anki card fields (Phase 2). Populated by the qwen3:14b card-generation pass.
+    german: str = ""
+    article: str = ""  # definite article for nouns, encodes gender: il/la/lo/l'
+    pos: str = ""  # part of speech: noun/verb/adjective/...
+    card_ready: bool = False  # big model has enriched this into a studyable card
+    anki_note_id: Optional[int] = None  # note id returned by AnkiConnect once pushed
+    exported_at: Optional[dt.datetime] = None
 
 
 class Mistake(SQLModel, table=True):
@@ -132,8 +139,49 @@ def get_engine():
     return _engine
 
 
+def _default_literal(col) -> str:
+    """SQL literal for a NOT NULL column's default (needed to ALTER ADD COLUMN on
+    a table that already has rows)."""
+    default = getattr(col, "default", None)
+    val = default.arg if default is not None and getattr(default, "is_scalar", False) else None
+    if val is None:
+        try:
+            val = col.type.python_type()  # e.g. str() -> "", int() -> 0
+        except Exception:
+            val = ""
+    if isinstance(val, bool):
+        return "1" if val else "0"
+    if isinstance(val, (int, float)):
+        return str(val)
+    return "''"
+
+
+def _migrate() -> None:
+    """Add any model columns missing from existing tables (lightweight, additive).
+    create_all() makes new tables but never ALTERs existing ones."""
+    from sqlalchemy import inspect, text
+
+    engine = get_engine()
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue  # freshly created by create_all with all columns
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                coltype = col.type.compile(engine.dialect)
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'
+                if not col.nullable:
+                    ddl += f" DEFAULT {_default_literal(col)}"
+                conn.execute(text(ddl))
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(get_engine())
+    _migrate()
     # Ensure the singleton profile row exists.
     with get_session() as s:
         if s.get(Profile, 1) is None:

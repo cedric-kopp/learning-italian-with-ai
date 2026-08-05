@@ -507,6 +507,14 @@ wheels = [
 ]
 
 [[package]]
+name = "it-core-news-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl", hash = "sha256:3f617bf9a8ae0418953cf1fbf014e10272684c4229e882a7fd748b637d0100bf" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1705,6 +1713,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "it-core-news-sm" },
     { name = "kokoro" },
     { name = "mlx-whisper" },
     { name = "numpy" },
@@ -1712,6 +1721,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "soundfile" },
+    { name = "spacy" },
     { name = "sqlmodel" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1719,6 +1729,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "it-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "kokoro", specifier = ">=0.9.4" },
     { name = "mlx-whisper", specifier = ">=0.4.2" },
     { name = "numpy", specifier = ">=1.26,<2.3" },
@@ -1726,6 +1737,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "soundfile", specifier = ">=0.12" },
+    { name = "spacy", specifier = ">=3.8" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
