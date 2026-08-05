@@ -9,17 +9,25 @@ const micLabel = $("#micLabel");
 const statusEl = $("#status");
 const turnTpl = $("#turnTpl");
 
+const LENGTHS = ["short", "medium", "long"];
+
 const state = {
   sessionId: Math.floor(Math.random() * 1e9),
   mediaRecorder: null,
   chunks: [],
   recording: false,
   busy: false,
+  tutorName: "Tutor",
+  length: "medium",
 };
 
 // ---- init ----
 init();
 async function init() {
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    applyConfig(cfg);
+  } catch {}
   try {
     const info = await (await fetch("/api/backend")).json();
     $("#backend").textContent = `${info.backend} · ${info.model}`;
@@ -32,6 +40,25 @@ async function init() {
     $("#speed").value = p.tts_speed ?? 0.9;
     $("#speedVal").textContent = (p.tts_speed ?? 0.9).toFixed(2) + "×";
   } catch {}
+}
+
+// Make the whole UI language-agnostic from /api/config.
+function applyConfig(cfg) {
+  state.tutorName = cfg.tutor_name || "Tutor";
+  document.title = `${cfg.app_name} — ${cfg.target.name} voice tutor`;
+  $("#appName").textContent = cfg.app_name;
+  const flag = $("#flag");
+  flag.textContent = cfg.target.flag || "";
+  flag.classList.add("emoji");
+  $("#modeImmersion").textContent = `${cfg.target.flag} ${cfg.target.name} immersion`;
+  $("#modeTeacher").textContent = `${cfg.native.flag} ${cfg.native.name} teacher`;
+  $("#hint").innerHTML =
+    `Hold the mic button (or press &amp; hold <kbd>Space</kbd>) and speak in ${cfg.target.name}. ` +
+    `${state.tutorName} will reply out loud and gently correct you.`;
+  const ih = $("#importHint");
+  if (ih) ih.textContent =
+    `Paste ${cfg.target.name} words you already know (one per line or comma-separated). ` +
+    `The tutor won't re-teach them and won't turn them into cards.`;
 }
 
 // ---- speed slider persists to profile ----
@@ -51,6 +78,11 @@ $("#level").addEventListener("change", (e) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ level: e.target.value }),
   }).catch(() => {});
+});
+// ---- reply-length slider (short / medium / long) ----
+$("#length").addEventListener("input", (e) => {
+  state.length = LENGTHS[+e.target.value] || "medium";
+  $("#lengthVal").textContent = state.length;
 });
 
 // ---- push-to-talk wiring ----
@@ -121,6 +153,7 @@ async function handleRecording() {
   fd.append("audio", blob, "speech.webm");
   fd.append("mode", $("#mode").value);
   fd.append("level", $("#level").value);
+  fd.append("length", state.length);
   fd.append("session_id", String(state.sessionId));
 
   try {
@@ -152,13 +185,15 @@ function renderTurn(data) {
   const corr = node.querySelector(".corrections");
   (data.corrections || []).forEach((c) => corr.appendChild(correctionEl(c)));
 
+  const tn = node.querySelector(".tutor-name");
+  if (tn) tn.textContent = state.tutorName;
   node.querySelector(".reply").textContent = data.reply || "";
 
   const vocab = node.querySelector(".vocab");
   (data.new_vocab || []).forEach((v) => {
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.innerHTML = `<b>${escapeHtml(v.italian)}</b> — ${escapeHtml(v.english || "")}`;
+    chip.innerHTML = `<b>${escapeHtml(v.term)}</b> — ${escapeHtml(v.translation || "")}`;
     if (v.example) chip.title = v.example;
     vocab.appendChild(chip);
   });

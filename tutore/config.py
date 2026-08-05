@@ -13,10 +13,19 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from . import languages
+
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
+
+APP_NAME = os.environ.get("APP_NAME", "Tutore")
+
+# --- Which language you learn (TARGET) and explain in (NATIVE, default English) ---
+TARGET = languages.get(os.environ.get("TARGET_LANG", languages.DEFAULT_TARGET), languages.DEFAULT_TARGET)
+NATIVE = languages.get(os.environ.get("NATIVE_LANG", languages.DEFAULT_NATIVE), languages.DEFAULT_NATIVE)
+TUTOR_NAME = os.environ.get("TUTOR_NAME", TARGET.tutor_name)
 
 
 def _get(name: str, default: str) -> str:
@@ -52,8 +61,9 @@ LLM = load_llm_config()
 
 WHISPER_MODEL = _get("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
 
-TTS_VOICE_IT = _get("TTS_VOICE_IT", "im_nicola")
-TTS_VOICE_EN = _get("TTS_VOICE_EN", "am_michael")
+# TTS voices default to the registry's per-language voice; override in .env.
+TTS_VOICE_TARGET = _get("TTS_VOICE_TARGET", TARGET.voice)
+TTS_VOICE_NATIVE = _get("TTS_VOICE_NATIVE", NATIVE.voice)
 
 HOST = _get("HOST", "127.0.0.1")
 PORT = int(_get("PORT", "8770"))
@@ -65,5 +75,9 @@ DB_PATH = ROOT / _get("DB_PATH", "data/tutore.db")
 # (latency irrelevant there). Chat still uses the fast LLM above.
 CARD_MODEL = _get("CARD_MODEL", "qwen3:14b")
 ANKI_CONNECT_URL = _get("ANKI_CONNECT_URL", "http://127.0.0.1:8765")
-ANKI_DECK = _get("ANKI_DECK", "Tutore Italian")
-ANKI_TAGS = [t.strip() for t in _get("ANKI_TAGS", "tutore,italian").split(",") if t.strip()]
+ANKI_DECK = _get("ANKI_DECK", f"{APP_NAME} {TARGET.name_en}")
+ANKI_TAGS = [
+    t.strip()
+    for t in _get("ANKI_TAGS", f"{APP_NAME.lower()},{TARGET.name_en.lower()}").split(",")
+    if t.strip()
+]

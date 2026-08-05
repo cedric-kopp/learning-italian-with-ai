@@ -25,10 +25,10 @@ class Profile(SQLModel, table=True):
 
     id: Optional[int] = Field(default=1, primary_key=True)
     level: str = "A2"  # working CEFR level, A1..B1
-    goals: str = "Speak Italian confidently for daily life and university in Rome."
+    goals: str = "Speak confidently for everyday life."
     tts_speed: float = 0.9  # 1.0 = natural; <1 slower for beginners
-    voice_it: str = "im_nicola"
-    voice_en: str = "am_michael"
+    voice_target: str = ""  # Kokoro voice for the language being learned
+    voice_native: str = ""  # Kokoro voice for the explanation/native language
     updated_at: dt.datetime = Field(default_factory=_now)
 
 
@@ -60,8 +60,7 @@ class Vocab(SQLModel, table=True):
     """A vocabulary item with SM-2 spaced-repetition scheduling (Phase 2 UI)."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    italian: str = Field(index=True)
-    english: str = ""
+    term: str = Field(index=True)  # the word/phrase in the TARGET language
     example: str = ""
     source: str = "conversation"  # "conversation" | "upload" | "manual"
     created_at: dt.datetime = Field(default_factory=_now)
@@ -72,7 +71,7 @@ class Vocab(SQLModel, table=True):
     lapses: int = 0
     due_at: dt.datetime = Field(default_factory=_now)
     # Anki card fields (Phase 2). Populated by the qwen3:14b card-generation pass.
-    german: str = ""
+    translation: str = ""  # the word in the NATIVE language (card back)
     article: str = ""  # definite article for nouns, encodes gender: il/la/lo/l'
     pos: str = ""  # part of speech: noun/verb/adjective/...
     card_ready: bool = False  # big model has enriched this into a studyable card
@@ -156,14 +155,36 @@ def _default_literal(col) -> str:
     return "''"
 
 
+# Column renames for the i18n refactor — applied first so data is preserved
+# (SQLite RENAME COLUMN needs 3.25+). Idempotent: only renames old->new if the old
+# column still exists and the new one doesn't yet.
+_RENAMES: dict[str, list[tuple[str, str]]] = {
+    "vocab": [("italian", "term"), ("german", "translation")],
+    "profile": [("voice_it", "voice_target"), ("voice_en", "voice_native")],
+}
+
+
 def _migrate() -> None:
-    """Add any model columns missing from existing tables (lightweight, additive).
-    create_all() makes new tables but never ALTERs existing ones."""
+    """Rename legacy columns, then add any model columns missing from existing
+    tables. create_all() makes new tables but never ALTERs existing ones."""
     from sqlalchemy import inspect, text
 
     engine = get_engine()
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())
+
+    # 1) Renames first (preserve existing data).
+    with engine.begin() as conn:
+        for tbl, pairs in _RENAMES.items():
+            if tbl not in existing_tables:
+                continue
+            cols = {c["name"] for c in insp.get_columns(tbl)}
+            for old, new in pairs:
+                if old in cols and new not in cols:
+                    conn.execute(text(f'ALTER TABLE "{tbl}" RENAME COLUMN "{old}" TO "{new}"'))
+
+    # 2) Additive column pass (re-inspect after any renames).
+    insp = inspect(engine)
     with engine.begin() as conn:
         for table in SQLModel.metadata.sorted_tables:
             if table.name not in existing_tables:

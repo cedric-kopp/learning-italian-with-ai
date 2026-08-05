@@ -18,29 +18,34 @@ from collections import Counter
 from sqlmodel import select
 
 from . import db
-from .config import ROOT
+from .config import ROOT, TARGET, TUTOR_NAME
 from .db import Mistake, Profile, Turn, Vocab
 from .llm import TurnResult
 
-KNOWN_CSV = ROOT / "italian_known_vocab.csv"
+KNOWN_CSV = ROOT / "known_vocab.csv"
+_LEGACY_KNOWN_CSV = ROOT / "italian_known_vocab.csv"  # migrated on first use
 
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-_ARTICLES = {"il", "lo", "la", "i", "gli", "le", "un", "una", "uno"}
+# Target-language articles, split for elision handling (l' / un').
+_ELISION_ARTICLES = tuple(a for a in TARGET.articles if a.endswith("'"))
+_WORD_ARTICLES = {a for a in TARGET.articles if not a.endswith("'")}
 
 
 def _norm(word: str) -> str:
-    """Normalize an Italian word for dedup: lowercase, strip punctuation, and drop
-    a leading definite/indefinite article so 'la casa' == 'casa', 'Piacere' ==
-    'piacere'."""
+    """Normalize a target-language word for dedup: lowercase, strip punctuation, and
+    drop a leading article so 'la casa' == 'casa', 'Piacere' == 'piacere'."""
     w = (word or "").strip().lower()
     w = re.sub(r"^[\"'“”«»\-\s]+|[\"'“”«».,;:!?]+$", "", w)
-    w = re.sub(r"^(l'|un')\s*", "", w)  # attached apostrophe articles
+    for a in _ELISION_ARTICLES:  # attached apostrophe articles
+        if w.startswith(a):
+            w = w[len(a):].lstrip()
+            break
     parts = w.split()
-    if len(parts) > 1 and parts[0] in _ARTICLES:
+    if len(parts) > 1 and parts[0] in _WORD_ARTICLES:
         parts = parts[1:]
     return " ".join(parts).strip()
 
@@ -71,11 +76,11 @@ def profile_block(max_known: int = 60, max_recent: int = 25, max_tags: int = 6) 
     lines = [f"- Working level: {p.level}", f"- Goals: {p.goals}"]
 
     if known:
-        words = ", ".join(v.italian for v in known if v.italian)
+        words = ", ".join(v.term for v in known if v.term)
         lines.append(f"- Words the learner ALREADY KNOWS (do not re-teach these): {words}")
 
     if recent:
-        words = ", ".join(v.italian for v in recent if v.italian)
+        words = ", ".join(v.term for v in recent if v.term)
         lines.append(f"- Recently introduced in conversation: {words}")
 
     tags = Counter(m.tag for m in mistakes if m.tag)
@@ -91,7 +96,7 @@ _VOCAB_SPLIT = re.compile(r"[\n,;••]+")
 
 
 def import_known_vocab(text: str) -> dict:
-    """Ingest an Italian-only list of words the learner already knows.
+    """Ingest a target-language-only list of words the learner already knows.
 
     Format is forgiving: one word/phrase per line, or comma/semicolon separated.
     Leading bullets/numbering are stripped. Returns {added, skipped}.
@@ -110,7 +115,7 @@ def import_known_vocab(text: str) -> dict:
 
     added = skipped = 0
     with db.get_session() as s:
-        existing = {_norm(v.italian): v for v in s.exec(select(Vocab)).all()}
+        existing = {_norm(v.term): v for v in s.exec(select(Vocab)).all()}
         for word in candidates:
             key = _norm(word)
             row = existing.get(key)
@@ -121,7 +126,7 @@ def import_known_vocab(text: str) -> dict:
                     s.add(row)
                 skipped += 1
                 continue
-            new_row = Vocab(italian=word, source="upload", card_ready=False, due_at=_now())
+            new_row = Vocab(term=word, source="upload", card_ready=False, due_at=_now())
             s.add(new_row)
             existing[key] = new_row
             added += 1
@@ -132,19 +137,36 @@ def import_known_vocab(text: str) -> dict:
 
 
 def export_known_vocab_csv() -> int:
-    """Mirror the DB's known list (source='upload') to italian_known_vocab.csv so
-    the committed file always reflects the source of truth. Called on every change."""
+    """Mirror the DB's known list (source='upload') to known_vocab.csv so the
+    committed file always reflects the source of truth. Called on every change."""
     with db.get_session() as s:
         words = sorted(
-            (v.italian for v in s.exec(select(Vocab).where(Vocab.source == "upload")).all()),
+            (v.term for v in s.exec(select(Vocab).where(Vocab.source == "upload")).all()),
             key=str.lower,
         )
     with open(KNOWN_CSV, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["italian"])
+        w.writerow(["term"])
         for word in words:
             w.writerow([word])
+    # Retire the legacy Italian-specific filename once migrated.
+    if _LEGACY_KNOWN_CSV.exists() and _LEGACY_KNOWN_CSV != KNOWN_CSV:
+        try:
+            _LEGACY_KNOWN_CSV.unlink()
+        except OSError:
+            pass
     return len(words)
+
+
+def ensure_known_csv() -> None:
+    """The known-vocab file is gitignored (personal, per-instance), so recreate it
+    from the DB on first run of a fresh clone. Migrates the legacy filename too."""
+    if KNOWN_CSV.exists():
+        return
+    if _LEGACY_KNOWN_CSV.exists():  # older clone had the Italian-named file
+        _LEGACY_KNOWN_CSV.replace(KNOWN_CSV)
+        return
+    export_known_vocab_csv()  # writes header (+ any words already in the DB)
 
 
 def promote_to_known(vocab_ids: list[int]) -> int:
@@ -167,7 +189,7 @@ def promote_to_known(vocab_ids: list[int]) -> int:
 
 
 def session_transcript(session_id: int | None, max_turns: int = 60) -> str:
-    """Reconstruct a session's conversation as 'Tu: … / Marco: …' lines for the
+    """Reconstruct a session's conversation as 'User: … / <Tutor>: …' lines for the
     curator model. Falls back to the most recent turns if no session id."""
     with db.get_session() as s:
         q = select(Turn)
@@ -178,21 +200,21 @@ def session_transcript(session_id: int | None, max_turns: int = 60) -> str:
     lines = []
     for t in rows:
         if t.transcript:
-            lines.append(f"Tu: {t.transcript}")
+            lines.append(f"User: {t.transcript}")
         if t.tutor_reply:
-            lines.append(f"Marco: {t.tutor_reply}")
+            lines.append(f"{TUTOR_NAME}: {t.tutor_reply}")
     return "\n".join(lines)
 
 
 def card_exclude_set() -> set[str]:
-    """Normalized Italian words to keep OUT of card generation: everything the
-    learner already knows (uploaded) or already has a card for (exported)."""
+    """Normalized target-language words to keep OUT of card generation: everything
+    the learner already knows (uploaded) or already has a card for (exported)."""
     with db.get_session() as s:
         rows = s.exec(select(Vocab)).all()
         out: set[str] = set()
         for v in rows:
             if v.source == "upload" or v.exported_at is not None or v.anki_note_id is not None:
-                out.add(_norm(v.italian))
+                out.add(_norm(v.term))
     return {w for w in out if w}
 
 

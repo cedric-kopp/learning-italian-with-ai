@@ -21,12 +21,14 @@ echo "==> .env"
 cat <<'EOF'
 
 Setup done. Next:
+  • Choose the language you want to learn (default: Italian):
+      uv run python scripts/configure.py
   • LLM engine — pick ONE:
-      Ollama:  brew install ollama && ollama serve   (then: ollama pull qwen3:14b)
+      Ollama:  brew install ollama && ollama serve   (then: ollama pull gemma3:4b && ollama pull qwen3:14b)
       MLX:     uv run mlx_lm.server --model mlx-community/Qwen3-14B-4bit --port 8080
   • Run the tutor:
       ./scripts/run-ollama.sh      (or)      ./scripts/run-mlx.sh
-  • Open http://localhost:8000
+  • Open http://localhost:8770
 
 First run downloads the Whisper + Kokoro models (a few GB) — give it a minute.
 EOF

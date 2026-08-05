@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tutore — Italian voice tutor</title>
+  <title>Voice Tutor</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="flag" aria-hidden="true"></span>
-      <h1>Tutore</h1>
+      <span class="flag" id="flag" aria-hidden="true"></span>
+      <h1 id="appName">Tutor</h1>
     </div>
     <div class="topbar-right">
       <div class="backend" id="backend" title="Active LLM backend">…</div>
@@ -39,11 +39,11 @@
 
     <section class="panel-sec">
       <h3>Import known vocabulary</h3>
-      <p class="muted">
-        Paste Italian words you already know (one per line or comma-separated).
+      <p class="muted" id="importHint">
+        Paste words you already know (one per line or comma-separated).
         The tutor won't re-teach them and won't turn them into cards.
       </p>
-      <textarea id="knownVocab" rows="5" placeholder="ciao&#10;la casa&#10;mangiare, bello"></textarea>
+      <textarea id="knownVocab" rows="5"></textarea>
       <div class="row">
         <button id="importVocab">Import list</button>
         <span class="muted" id="importResult"></span>
@@ -55,8 +55,8 @@
     <div class="control">
       <label for="mode">Mode</label>
       <select id="mode">
-        <option value="immersion">🇮🇹 Italian immersion</option>
-        <option value="english_teacher">🇬🇧 English teacher</option>
+        <option value="immersion" id="modeImmersion">Immersion</option>
+        <option value="english_teacher" id="modeTeacher">Teacher</option>
       </select>
     </div>
     <div class="control">
@@ -68,6 +68,10 @@
       </select>
     </div>
     <div class="control">
+      <label for="length">Reply length <span id="lengthVal">medium</span></label>
+      <input id="length" type="range" min="0" max="2" step="1" value="1" />
+    </div>
+    <div class="control">
       <label for="speed">Voice speed <span id="speedVal">0.9×</span></label>
       <input id="speed" type="range" min="0.6" max="1.2" step="0.05" value="0.9" />
     </div>
@@ -75,8 +79,7 @@
 
   <main id="log" class="log" aria-live="polite">
     <div class="hint" id="hint">
-      Hold the mic button (or press &amp; hold <kbd>Space</kbd>) and speak in Italian.
-      Marco will reply out loud and gently correct you.
+      Hold the mic button (or press &amp; hold <kbd>Space</kbd>) and speak.
     </div>
   </main>
 
@@ -97,7 +100,7 @@
       </div>
       <div class="corrections"></div>
       <div class="marco">
-        <div class="who">Marco</div>
+        <div class="who tutor-name">Tutor</div>
         <div class="reply"></div>
         <button class="replay" title="Replay audio">▶ Replay</button>
       </div>

@@ -1,29 +1,41 @@
 """Batch flashcard generation — the session-end handoff to a larger model.
 
-gemma3:4b keeps the conversation fast; here we spend qwen3:14b (CARD_MODEL) to
-turn harvested Italian words into proper German-backed Anki cards. Latency is
-irrelevant (runs once when the user ends a session), so we buy quality.
+The fast chat model keeps conversation snappy; here we spend CARD_MODEL (qwen3:14b)
+to turn harvested TARGET-language words into proper NATIVE-language-backed Anki
+cards. Latency is irrelevant (runs once at session end), so we buy quality. All
+language-specific facts come from the registry via config.TARGET / config.NATIVE.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from openai import OpenAI
 
-from .config import CARD_MODEL, LLM
+from .config import CARD_MODEL, LLM, NATIVE, TARGET, TUTOR_NAME
 from .llm import _demarkdown, _extract_json
 
-_ARTICLES = {"il", "lo", "la", "i", "gli", "le", "un", "una", "uno"}
+# Articles for the target language, split into attached-elision ("l'") vs standalone.
+_ELISION_ARTICLES = tuple(a for a in TARGET.articles if a.endswith("'"))
+_WORD_ARTICLES = {a for a in TARGET.articles if not a.endswith("'")}
+_TARGET_ARTICLES = set(TARGET.articles)
+# Registry stopwords + the transcript speaker labels (so "User:" / the tutor name
+# never become flashcards).
+_STOP = set(TARGET.stopwords) | {"user", TUTOR_NAME.lower()}
 
 
 def _strip_article(word: str) -> str:
-    w = re.sub(r"^(l'|un')\s*", "", word.strip().lower())
+    """Drop a leading article so 'la casa' == 'casa' for dedup/matching."""
+    w = word.strip().lower()
+    for a in _ELISION_ARTICLES:
+        if w.startswith(a):
+            w = w[len(a):].lstrip()
+            break
     parts = w.split()
-    if len(parts) > 1 and parts[0] in _ARTICLES:
+    if len(parts) > 1 and parts[0] in _WORD_ARTICLES:
         parts = parts[1:]
     return " ".join(parts).strip()
+
 
 # Same local server as chat, different (bigger) model.
 _client = OpenAI(base_url=LLM.base_url, api_key=LLM.api_key)
@@ -31,52 +43,37 @@ _client = OpenAI(base_url=LLM.base_url, api_key=LLM.api_key)
 
 @dataclass
 class Card:
-    italian: str
-    german: str = ""
-    article: str = ""  # il/la/lo/l' for nouns, "" otherwise
-    pos: str = ""  # noun/verb/adjective/adverb/phrase/other
-    example_it: str = ""
+    term: str  # dictionary form in the TARGET language
+    translation: str = ""  # NATIVE-language translation (card back)
+    article: str = ""  # target definite article for nouns, "" otherwise
+    pos: str = ""  # noun/verb/adjective/adverb
+    example: str = ""  # short target-language example sentence
 
     @property
     def front(self) -> str:
-        """Anki front: Italian, with article for nouns so gender is learned."""
+        """Anki front: target word, with article for nouns so gender is learned."""
         if self.article and self.pos == "noun":
             sep = "" if self.article.endswith("'") else " "  # l'azione, not l' azione
-            return f"{self.article}{sep}{self.italian}"
-        return self.italian
+            return f"{self.article}{sep}{self.term}"
+        return self.term
 
     @property
     def back(self) -> str:
-        """Anki back: German translation + POS tag + Italian example."""
-        parts = [self.german]
+        """Anki back: native translation + POS tag + a target-language example."""
+        parts = [self.translation]
         if self.pos:
             parts.append(f"({self.pos})")
         line = " ".join(p for p in parts if p)
-        if self.example_it:
-            line += f"\n\nes. {self.example_it}"
+        if self.example:
+            line += f"\n\nex: {self.example}"
         return line
 
 
-# --- Step 1: candidate extraction (deterministic, via spaCy Italian) ----------
-# spaCy gives us reliable lemmatization + POS, so proper nouns (PROPN), function
-# words (DET/ADP/PRON/AUX/…), and inflected forms are handled grammatically rather
-# than by a fragile LLM prompt. A small stoplist still drops grammar meta-terms
-# (tagged NOUN) and trivial greetings.
+# --- Step 1: candidate extraction (deterministic, via spaCy) ------------------
+# spaCy gives reliable POS, so proper nouns (PROPN), function words (DET/ADP/PRON/
+# AUX/…) and inflected forms are handled grammatically, not by a fragile prompt.
+# A per-language stoplist still drops grammar meta-terms (tagged NOUN) + greetings.
 _UPOS_TO_POS = {"NOUN": "noun", "VERB": "verb", "ADJ": "adjective", "ADV": "adverb"}
-_STOP = {
-    # grammar / linguistic meta-terminology (spaCy tags these as NOUN)
-    "coniugazione", "verbo", "aggettivo", "sostantivo", "avverbio", "articolo",
-    "preposizione", "pronome", "congiunzione", "participio", "gerundio", "infinito",
-    "congiuntivo", "indicativo", "condizionale", "imperativo", "presente", "passato",
-    "prossimo", "imperfetto", "futuro", "trapassato", "singolare", "plurale",
-    "maschile", "femminile", "genere", "frase", "parola", "esempio", "grammatica",
-    # bare auxiliaries + trivial greetings/politeness
-    "essere", "avere", "ciao", "salve", "grazie", "prego", "buongiorno", "buonasera",
-    "buonanotte", "arrivederci", "sì",
-    # grammatical particles/adverbs spaCy tags as ADV/PART -> would leak as "cards"
-    "non", "più", "meno", "ci", "ne", "già", "mai", "ancora", "appena", "anche",
-    "poi", "qui", "qua", "lì", "là", "ecco", "molto", "poco", "tanto", "troppo",
-}
 
 _nlp = None
 
@@ -87,14 +84,13 @@ def _get_nlp():
         import spacy
 
         # Tagger + morphologizer give POS/lemma; parser + NER not needed → faster.
-        _nlp = spacy.load("it_core_news_sm", disable=["parser", "ner"])
+        _nlp = spacy.load(TARGET.spacy_model, disable=["parser", "ner"])
     return _nlp
 
 
 def extract_candidates(transcript: str, exclude: set[str]) -> list[tuple[str, str]]:
-    """Return [(surface, pos)] of card-worthy content-word tokens from the
-    transcript. spaCy handles POS + proper-noun/function-word filtering; the LLM
-    does the actual lemmatization (it's better on Italian clitics than sm)."""
+    """Return [(surface, pos)] of card-worthy content-word tokens. spaCy handles
+    POS + proper-noun/function-word filtering; the LLM does the lemmatization."""
     doc = _get_nlp()(transcript)
     seen: set[str] = set()
     out: list[tuple[str, str]] = []
@@ -116,27 +112,26 @@ def extract_candidates(transcript: str, exclude: set[str]) -> list[tuple[str, st
 
 
 # --- Step 2: lemmatize + enrich (LLM's strengths) -----------------------------
-_IT_ARTICLES = {"il", "lo", "la", "l'", "i", "gli", "le"}
 _MODEL_POS = {"noun", "verb", "adjective", "adverb"}
 
-_ENRICH_SYSTEM = """You are an Italian→German lexicographer making Anki cards for a
-German native speaker (level A2). You receive Italian words AS THEY APPEARED in a
-conversation (possibly inflected, or a verb with an attached pronoun), each with a
-rough part-of-speech HINT that may be WRONG. For EACH input, echo the word and
-return its card. If the word is a conjugated verb, give the INFINITIVE even when
-the hint says adjective/noun.
-{
+_ENRICH_SYSTEM = f"""You are a {TARGET.name_en}→{NATIVE.name_en} lexicographer making
+Anki cards for a {NATIVE.name_en} speaker (level A2). You receive {TARGET.name_en}
+words AS THEY APPEARED in a conversation (possibly inflected, or a verb with an
+attached pronoun), each with a rough part-of-speech HINT that may be WRONG. For EACH
+input, echo the word and return its card. If the word is a conjugated verb, give the
+INFINITIVE even when the hint says adjective/noun.
+{{
   "cards": [
-    {
+    {{
       "word": "<the EXACT input word, echoed verbatim so it can be matched back>",
-      "italian": "<DICTIONARY form: infinitive for verbs (drop attached pronouns), MASCULINE SINGULAR for adjectives, SINGULAR for nouns>",
+      "term": "<DICTIONARY form: infinitive for verbs (drop attached pronouns), MASCULINE SINGULAR for adjectives, SINGULAR for nouns>",
       "pos": "noun|verb|adjective|adverb",
-      "it_article": "<the ITALIAN definite singular article for NOUNS only: il, lo, la, or l' — NOT a German article; empty '' for non-nouns>",
-      "german": "<German translation; for nouns include the German article, e.g. 'das Haus'>",
-      "example_it": "<one short, natural A2 Italian example sentence using the word>"
-    }
+      "article": "<the {TARGET.name_en} definite singular article for NOUNS only (in {TARGET.name_en}, NOT {NATIVE.name_en}); empty '' for non-nouns>",
+      "translation": "<{NATIVE.name_en} translation; for nouns include the {NATIVE.name_en} article if it has one>",
+      "example": "<one short, natural A2 {TARGET.name_en} example sentence using the word>"
+    }}
   ]
-}
+}}
 Include EVERY input word exactly once. Return ONLY that JSON. No markdown."""
 
 
@@ -178,24 +173,24 @@ def _enrich(candidates: list[tuple[str, str]]) -> list[Card]:
         e = by_word.get(_strip_article(surface))
         if not e:
             continue  # no enrichment -> DROP (never fall back to the raw surface)
-        italian = _demarkdown(e.get("italian", "")).lower()
-        if not italian:
+        term = _demarkdown(e.get("term", "")).lower()
+        if not term:
             continue
         pos = _demarkdown(e.get("pos", "")).lower()
         if pos not in _MODEL_POS:
             pos = spacy_pos  # fall back to spaCy's tag if the model's is unusable
-        # Keep the article only if it's a real Italian article (guards against the
-        # model putting a German article like "der" here).
-        article = _demarkdown(e.get("it_article", "")).lower()
-        if article not in _IT_ARTICLES or pos != "noun":
+        # Keep the article only if it's a real TARGET-language article (guards
+        # against the model putting a native-language article here).
+        article = _demarkdown(e.get("article", "")).lower()
+        if article not in _TARGET_ARTICLES or pos != "noun":
             article = ""
         cards.append(
             Card(
-                italian=italian,
-                german=_demarkdown(e.get("german", "")),
+                term=term,
+                translation=_demarkdown(e.get("translation", "")),
                 article=article,
                 pos=pos,
-                example_it=_demarkdown(e.get("example_it", "")),
+                example=_demarkdown(e.get("example", "")),
             )
         )
     return cards
@@ -204,7 +199,7 @@ def _enrich(candidates: list[tuple[str, str]]) -> list[Card]:
 def curate_and_generate(transcript: str, exclude: set[str] | None = None, cap: int = 20) -> list[Card]:
     """spaCy extracts clean content-word tokens from the transcript (dropping proper
     nouns / function words grammatically); the LLM lemmatizes + enriches them into
-    German-backed cards. Final dedup honors the exclude set and the LLM's lemmas."""
+    native-backed cards. Final dedup honors the exclude set and the LLM's lemmas."""
     transcript = (transcript or "").strip()
     if not transcript:
         return []
@@ -216,8 +211,8 @@ def curate_and_generate(transcript: str, exclude: set[str] | None = None, cap: i
     seen: set[str] = set()
     out: list[Card] = []
     for c in _enrich(candidates):
-        key = _strip_article(c.italian)
-        if not c.german or not key or key in _STOP or key in exclude or key in seen:
+        key = _strip_article(c.term)
+        if not c.translation or not key or key in _STOP or key in exclude or key in seen:
             continue
         seen.add(key)
         out.append(c)

@@ -22,9 +22,10 @@ class Transcription:
     language: str
 
 
-def transcribe(audio_path: str, language: str | None = "it") -> Transcription:
+def transcribe(audio_path: str, language: str | None = None) -> Transcription:
     """Transcribe an audio file. `audio_path` is decoded by ffmpeg internally.
-    Pass language=None to let Whisper auto-detect (used for English-teacher mode)."""
+    Pass the target language code to bias decoding (immersion), or None to
+    auto-detect (teacher mode, where the learner may speak the native language)."""
     result = mlx_whisper.transcribe(
         audio_path,
         path_or_hf_repo=WHISPER_MODEL,

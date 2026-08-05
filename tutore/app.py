@@ -22,9 +22,9 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from . import anki, cards, db, llm, memory, stt, tts
-from .config import ANKI_DECK, HOST, PORT, WEB_DIR
+from .config import ANKI_DECK, APP_NAME, HOST, NATIVE, PORT, TARGET, TUTOR_NAME, WEB_DIR
 
-app = FastAPI(title="Tutore — Italian voice tutor")
+app = FastAPI(title=f"{APP_NAME} — {TARGET.name_en} voice tutor")
 
 # In-memory conversation history per session (Phase 1: single-process, fine).
 _HISTORY: dict[int, list[dict[str, str]]] = {}
@@ -34,11 +34,23 @@ _MAX_HISTORY = 12  # keep the last N messages to bound context
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    memory.ensure_known_csv()  # recreate the gitignored known-vocab file if missing
 
 
 @app.get("/api/backend")
 def get_backend() -> dict:
     return llm.backend_info()
+
+
+@app.get("/api/config")
+def get_config() -> dict:
+    """Drives the (language-agnostic) frontend: title, flag, mode labels, tutor."""
+    return {
+        "app_name": APP_NAME,
+        "tutor_name": TUTOR_NAME,
+        "target": {"code": TARGET.code, "name": TARGET.name_en, "flag": TARGET.flag},
+        "native": {"code": NATIVE.code, "name": NATIVE.name_en, "flag": NATIVE.flag},
+    }
 
 
 @app.get("/api/profile")
@@ -48,8 +60,6 @@ def get_profile() -> dict:
         "level": p.level,
         "goals": p.goals,
         "tts_speed": p.tts_speed,
-        "voice_it": p.voice_it,
-        "voice_en": p.voice_en,
     }
 
 
@@ -76,7 +86,7 @@ def put_profile(update: ProfileUpdate) -> dict:
 
 class TTSBody(BaseModel):
     text: str
-    lang: str = "it"
+    lang: str = TARGET.code
     speed: float | None = None
 
 
@@ -92,6 +102,7 @@ async def post_turn(
     audio: UploadFile,
     mode: str = Form("immersion"),
     level: str = Form(""),
+    length: str = Form("medium"),
     session_id: int = Form(0),
 ) -> JSONResponse:
     # 1) Persist upload to a temp file (ffmpeg/whisper read from disk).
@@ -102,11 +113,11 @@ async def post_turn(
         tmp_path = tmp.name
 
     try:
-        # 2) Speech -> text. Immersion assumes Italian (steadier transcription +
-        # honest pronunciation signal); English-teacher auto-detects so an English
-        # question isn't force-transcribed into Italian gibberish.
+        # 2) Speech -> text. Immersion biases to the target language (steadier
+        # transcription + honest pronunciation signal); teacher mode auto-detects so
+        # a native-language question isn't force-transcribed into target gibberish.
         t0 = time.perf_counter()
-        stt_lang = "it" if mode == "immersion" else None
+        stt_lang = TARGET.whisper if mode == "immersion" else None
         tr = stt.transcribe(tmp_path, language=stt_lang)
         stt_ms = int((time.perf_counter() - t0) * 1000)
     finally:
@@ -120,14 +131,14 @@ async def post_turn(
 
     if not tr.text.strip():
         # Nothing intelligible — ask for a repeat without hitting the LLM.
-        reply = "Scusa, non ho sentito bene. Puoi ripetere, per favore?"
-        wav = tts.synthesize(reply, lang="it", speed=profile.tts_speed)
+        reply = TARGET.repeat_prompt
+        wav = tts.synthesize(reply, lang=TARGET.code, speed=profile.tts_speed)
         return JSONResponse(
             {
                 "transcript": "",
                 "stt_confidence": tr.confidence,
                 "reply": reply,
-                "reply_lang": "it",
+                "reply_lang": TARGET.code,
                 "corrections": [],
                 "new_vocab": [],
                 "audio_b64": base64.b64encode(wav).decode("ascii"),
@@ -143,6 +154,7 @@ async def post_turn(
         profile_block=memory.profile_block(),
         history=history,
         user_text=tr.text,
+        length=length,
     )
 
     # Update rolling history.
@@ -191,7 +203,7 @@ async def import_vocab(
     text: str = Form(""),
     file: UploadFile | None = None,
 ) -> dict:
-    """Ingest an Italian-only list of words the learner already knows."""
+    """Ingest a target-language-only list of words the learner already knows."""
     payload = text or ""
     if file is not None:
         payload += "\n" + (await file.read()).decode("utf-8", errors="ignore")
@@ -213,8 +225,8 @@ class GenerateBody(BaseModel):
 
 def _card_from_row(row) -> "cards.Card":
     return cards.Card(
-        italian=row.italian, german=row.german, article=row.article,
-        pos=row.pos, example_it=row.example,
+        term=row.term, translation=row.translation, article=row.article,
+        pos=row.pos, example=row.example,
     )
 
 
@@ -234,7 +246,7 @@ def generate_cards_endpoint(body: GenerateBody = Body(default=GenerateBody())) -
         transcript = memory.session_transcript(body.session_id)
         if not transcript.strip():
             return {"generated": 0, "pushed": 0, "skipped": 0,
-                    "message": "No conversation yet — talk with Marco first."}
+                    "message": f"No conversation yet — talk with {TUTOR_NAME} first."}
 
         exclude = memory.card_exclude_set()
         built = cards.curate_and_generate(transcript, exclude)  # qwen3:14b, slow
@@ -243,7 +255,7 @@ def generate_cards_endpoint(body: GenerateBody = Body(default=GenerateBody())) -
         seen: set[str] = set()
         filtered = []
         for c in built:
-            key = memory._norm(c.italian)
+            key = memory._norm(c.term)
             if not key or key in exclude or key in seen:
                 continue
             seen.add(key)
@@ -253,16 +265,16 @@ def generate_cards_endpoint(body: GenerateBody = Body(default=GenerateBody())) -
             return {"generated": 0, "pushed": 0, "skipped": 0,
                     "message": "No new card-worthy vocabulary found this session."}
 
-        # Store as card_ready conversation vocab (upsert by normalized italian).
+        # Store as card_ready conversation vocab (upsert by normalized term).
         ids = []
         with db.get_session() as s:
-            existing = {memory._norm(v.italian): v for v in s.exec(select(db.Vocab)).all()}
+            existing = {memory._norm(v.term): v for v in s.exec(select(db.Vocab)).all()}
             for c in filtered:
-                key = memory._norm(c.italian)
-                row = existing.get(key) or db.Vocab(italian=c.italian, source="conversation")
-                row.german, row.article, row.pos = c.german, c.article, c.pos
-                if c.example_it:
-                    row.example = c.example_it
+                key = memory._norm(c.term)
+                row = existing.get(key) or db.Vocab(term=c.term, source="conversation")
+                row.translation, row.article, row.pos = c.translation, c.article, c.pos
+                if c.example:
+                    row.example = c.example
                 row.card_ready = True
                 s.add(row)
                 s.flush()
@@ -330,8 +342,8 @@ def list_vocab(limit: int = 100) -> dict:
         rows = s.exec(select(db.Vocab).order_by(db.Vocab.created_at.desc()).limit(limit)).all()
         out = [
             {
-                "italian": r.italian,
-                "german": r.german,
+                "term": r.term,
+                "translation": r.translation,
                 "source": r.source,
                 "card_ready": r.card_ready,
                 "exported": r.exported_at is not None,

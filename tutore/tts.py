@@ -1,9 +1,10 @@
 """Text-to-speech via Kokoro (multilingual, open-weight).
 
-Kokoro uses a per-language pipeline keyed by a single-letter lang code:
-  'i' = Italian, 'a' = American English, 'b' = British English.
-Italian needs espeak-ng installed (brew install espeak-ng) for G2P.
-Pipelines are cached because construction loads the voice + G2P backend.
+Kokoro uses a per-language pipeline keyed by a single-letter code (Italian 'i',
+Spanish 'e', French 'f', Portuguese 'p', English 'a', Japanese 'j'). The language
+facts + default voices come from the registry (config.TARGET / config.NATIVE);
+`synthesize` receives an ISO code (the reply's language) and resolves the rest.
+Latin languages need espeak-ng for G2P; Japanese needs misaki[ja].
 """
 
 from __future__ import annotations
@@ -13,19 +14,23 @@ import io
 import numpy as np
 import soundfile as sf
 
-from .config import TTS_VOICE_EN, TTS_VOICE_IT
+from . import languages
+from .config import NATIVE, TARGET, TTS_VOICE_NATIVE, TTS_VOICE_TARGET
 
 SAMPLE_RATE = 24000  # Kokoro's native output rate
 
 _pipelines: dict[str, "object"] = {}
 
 
-def _lang_code(lang: str) -> str:
-    return "i" if lang.lower().startswith("it") else "a"
-
-
-def _voice_for(lang: str) -> str:
-    return TTS_VOICE_IT if lang.lower().startswith("it") else TTS_VOICE_EN
+def _resolve(lang: str) -> tuple[str, str]:
+    """Map an ISO language code to (Kokoro pipeline code, voice id)."""
+    code = (lang or TARGET.code).lower()
+    if code == TARGET.code:
+        return TARGET.kokoro, TTS_VOICE_TARGET
+    if code == NATIVE.code:
+        return NATIVE.kokoro, TTS_VOICE_NATIVE
+    L = languages.get(code, TARGET.code)  # fallback for any other code
+    return L.kokoro, L.voice
 
 
 def _get_pipeline(lang_code: str):
@@ -36,14 +41,15 @@ def _get_pipeline(lang_code: str):
     return _pipelines[lang_code]
 
 
-def synthesize(text: str, lang: str = "it", speed: float = 0.9) -> bytes:
-    """Render `text` to WAV bytes. `speed` 1.0 = natural, <1 slower."""
+def synthesize(text: str, lang: str | None = None, speed: float = 0.9) -> bytes:
+    """Render `text` to WAV bytes. `lang` is an ISO code (defaults to target).
+    `speed` 1.0 = natural, <1 slower."""
     text = (text or "").strip()
     if not text:
         return _wav_bytes(np.zeros(1, dtype=np.float32))
 
-    pipeline = _get_pipeline(_lang_code(lang))
-    voice = _voice_for(lang)
+    kokoro_code, voice = _resolve(lang or TARGET.code)
+    pipeline = _get_pipeline(kokoro_code)
 
     chunks: list[np.ndarray] = []
     for _, _, audio in pipeline(text, voice=voice, speed=float(speed)):

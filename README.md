@@ -1,12 +1,27 @@
-# Tutore 🇮🇹 — a local, open-weight voice tutor for Italian
+# Tutore 🗣️ — a local, open-weight voice tutor for language learning
 
-Speak Italian out loud, get corrected, and hear a natural spoken reply — all
-running **locally** on Apple Silicon. Built for getting to A2+ speaking before an
-Erasmus exchange.
+Speak your target language out loud, get corrected, and hear a natural spoken
+reply — all running **locally** on Apple Silicon.
 
 **Pipeline:** your voice → `mlx-whisper` (STT) → local LLM → Kokoro (TTS) → spoken
 reply. The transcript of what you said is shown too — an honest pronunciation
-check (if Whisper mishears you, an Italian might too).
+check (if Whisper mishears you, a native speaker might too).
+
+## Pick your language
+
+```bash
+uv run python scripts/configure.py     # interactive: choose what to learn
+```
+
+- **Fully supported** (Latin script, non-tonal, natural TTS voice): 🇮🇹 Italian,
+  🇪🇸 Spanish, 🇫🇷 French, 🇵🇹 Portuguese, 🇬🇧 English.
+- **With caveats:** 🇯🇵 Japanese (non-Latin — weaker pronunciation signal).
+- The **native language** for explanations + flashcard backs is configurable too
+  (defaults to English). The limiting factor is the TTS voice set (Kokoro), not
+  the LLM — languages without a Kokoro voice (e.g. German) can be the *native*
+  language but not a spoken *target*.
+
+Add a language by adding one entry to `tutore/languages.py`.
 
 ## What Phase 1 does
 

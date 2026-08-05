@@ -15,7 +15,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from .config import LLM
+from .config import LLM, NATIVE, TARGET
 from .prompts import system_prompt
 
 _client = OpenAI(base_url=LLM.base_url, api_key=LLM.api_key)
@@ -31,15 +31,15 @@ class Correction:
 
 @dataclass
 class VocabItem:
-    italian: str = ""
-    english: str = ""
+    term: str = ""
+    translation: str = ""
     example: str = ""
 
 
 @dataclass
 class TurnResult:
     reply: str
-    reply_lang: str = "it"
+    reply_lang: str = ""
     corrections: list[Correction] = field(default_factory=list)
     new_vocab: list[VocabItem] = field(default_factory=list)
     detected_level: str = ""
@@ -58,10 +58,11 @@ def run_turn(
     profile_block: str,
     history: list[dict[str, str]],
     user_text: str,
+    length: str = "medium",
 ) -> TurnResult:
     """Send one conversational turn and parse the structured JSON reply."""
     messages: list[dict[str, str]] = [
-        {"role": "system", "content": system_prompt(mode, level, profile_block)},
+        {"role": "system", "content": system_prompt(mode, level, profile_block, length)},
         *history,
         {"role": "user", "content": user_text},
     ]
@@ -83,7 +84,8 @@ def run_turn(
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     content = resp.choices[0].message.content or ""
-    result = _parse_turn(content, fallback_lang="en" if mode == "english_teacher" else "it")
+    fallback = NATIVE.code if mode == "english_teacher" else TARGET.code
+    result = _parse_turn(content, fallback_lang=fallback)
     result.llm_ms = elapsed_ms
     return result
 
@@ -143,9 +145,7 @@ def _salvage_reply(content: str) -> str:
 
 
 def _parse_turn(content: str, fallback_lang: str) -> TurnResult:
-    default = (
-        "Scusa, puoi ripetere?" if fallback_lang == "it" else "Sorry, could you say that again?"
-    )
+    default = TARGET.repeat_prompt if fallback_lang == TARGET.code else NATIVE.repeat_prompt
     data = _extract_json(content)
     if data is None:
         # Broken JSON — salvage a clean reply, never show raw field labels.
@@ -163,12 +163,12 @@ def _parse_turn(content: str, fallback_lang: str) -> TurnResult:
     ]
     new_vocab = [
         VocabItem(
-            italian=str(v.get("italian", "")).strip(),
-            english=str(v.get("english", "")).strip(),
+            term=str(v.get("term", "")).strip(),
+            translation=str(v.get("translation", "")).strip(),
             example=str(v.get("example", "")).strip(),
         )
         for v in data.get("new_vocab", []) or []
-        if isinstance(v, dict) and str(v.get("italian", "")).strip()
+        if isinstance(v, dict) and str(v.get("term", "")).strip()
     ]
     reply = _demarkdown(data.get("reply", ""))
     if _is_degenerate_reply(reply):
