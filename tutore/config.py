@@ -70,6 +70,11 @@ PORT = int(_get("PORT", "8770"))
 
 DB_PATH = ROOT / _get("DB_PATH", "data/tutore.db")
 
+# Per-session conversation logs saved for later quality review (gitignored,
+# personal). Set SAVE_TRANSCRIPTS=0 to disable.
+TRANSCRIPTS_DIR = ROOT / _get("TRANSCRIPTS_DIR", "transcripts")
+SAVE_TRANSCRIPTS = _get("SAVE_TRANSCRIPTS", "1").strip().lower() not in ("0", "false", "no")
+
 # --- Anki flashcards (Phase 2) ---
 # Bigger model used ONLY for the batch card-generation handoff at session end
 # (latency irrelevant there). Chat still uses the fast LLM above.

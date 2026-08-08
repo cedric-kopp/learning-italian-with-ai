@@ -6,6 +6,8 @@ data/*.db
 data/*.db-*
 .DS_Store
 uploads/
+# Personal session transcripts saved for later quality review — not part of the repo.
+transcripts/
 # Personal, per-instance vocab (recreated on first run) — not part of the repo.
 known_vocab.csv
 italian_vocab.csv

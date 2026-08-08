@@ -16,14 +16,15 @@ _LENGTH_HINT = {
 }
 
 
-def _schema_hint() -> str:
+def _schema_hint(scenario: bool = False) -> str:
     t, n = TARGET.name_en, NATIVE.name_en
     tc, nc = TARGET.code, NATIVE.code
+    goal_field = '\n  "goal_met": true | false,' if scenario else ""
     return f"""
 Respond with ONLY a valid JSON object (no markdown fences, no prose outside it):
 {{
   "reply": "<your spoken reply — the ONLY text that gets read aloud>",
-  "reply_lang": "{tc}" | "{nc}",
+  "reply_lang": "{tc}" | "{nc}",{goal_field}
   "corrections": [
     {{
       "your_text": "<the learner's exact phrase that was wrong>",
@@ -87,10 +88,37 @@ AND 1-3 real {target} examples in the same reply; don't just say you will.
 {length} Still record concrete errors in "corrections" and useful words in
 "new_vocab"."""
 
+_SCENARIO = """You are {character} in {setting}. This is a role-play to help a
+{target} learner practice a real situation.
 
-def system_prompt(mode: str, level: str, profile_block: str, length: str = "medium") -> str:
-    base = _TEACHER if mode == "english_teacher" else _IMMERSION
+Stay FULLY in character and speak ONLY in {target} in "reply" — never act as a
+teacher, never break character, never explain grammar in "reply". Match your
+{target} to CEFR level {level}: natural but understandable. {length} Be realistic
+but supportive; keep the conversation moving with a natural question or next step.
+
+The learner is trying to: {goal}
+Set "goal_met" to true as soon as the learner has ESSENTIALLY accomplished that
+goal — don't wait for a perfect or polite ending. Once the core task is done (e.g.
+they've ordered AND paid, gotten the directions, or agreed the key points), set
+"goal_met": true and give a short natural closing. Otherwise keep it false.
+
+You may still note genuine {target} mistakes in "corrections" (with explanations in
+{native}) — these are shown to the learner silently and are NOT spoken, so they do
+not break the role-play. Do not over-correct."""
+
+
+def system_prompt(
+    mode: str, level: str, profile_block: str, length: str = "medium", scenario=None
+) -> str:
     length_hint = _LENGTH_HINT.get(length, _LENGTH_HINT["medium"])
+    if mode == "scenario" and scenario is not None:
+        head = _SCENARIO.format(
+            character=scenario.character, setting=scenario.setting, goal=scenario.goal,
+            target=TARGET.name_en, native=NATIVE.name_en, level=level, length=length_hint,
+        )
+        return head + "\n" + _schema_hint(scenario=True).strip()
+
+    base = _TEACHER if mode == "english_teacher" else _IMMERSION
     parts = [
         base.format(
             tutor=TUTOR_NAME, target=TARGET.name_en, native=NATIVE.name_en,

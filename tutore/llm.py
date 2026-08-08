@@ -43,6 +43,7 @@ class TurnResult:
     corrections: list[Correction] = field(default_factory=list)
     new_vocab: list[VocabItem] = field(default_factory=list)
     detected_level: str = ""
+    goal_met: bool = False  # scenario role-play: goal accomplished
     raw: str = ""
     llm_ms: int = 0
 
@@ -59,10 +60,11 @@ def run_turn(
     history: list[dict[str, str]],
     user_text: str,
     length: str = "medium",
+    scenario=None,
 ) -> TurnResult:
     """Send one conversational turn and parse the structured JSON reply."""
     messages: list[dict[str, str]] = [
-        {"role": "system", "content": system_prompt(mode, level, profile_block, length)},
+        {"role": "system", "content": system_prompt(mode, level, profile_block, length, scenario)},
         *history,
         {"role": "user", "content": user_text},
     ]
@@ -88,6 +90,20 @@ def run_turn(
     result = _parse_turn(content, fallback_lang=fallback)
     result.llm_ms = elapsed_ms
     return result
+
+
+def opening_line(scenario, level: str, length: str = "medium") -> TurnResult:
+    """The character speaks first — greets the learner and opens the scene."""
+    return run_turn(
+        mode="scenario",
+        level=level,
+        profile_block="",
+        history=[],
+        user_text="[The learner has just arrived. Greet them in character and open "
+        "the scene naturally, in one or two sentences.]",
+        length=length,
+        scenario=scenario,
+    )
 
 
 def _create_resilient(kwargs: dict[str, Any]):
@@ -180,6 +196,7 @@ def _parse_turn(content: str, fallback_lang: str) -> TurnResult:
         corrections=corrections,
         new_vocab=new_vocab,
         detected_level=str(data.get("detected_level", "")).strip(),
+        goal_met=bool(data.get("goal_met", False)),
         raw=content,
     )
 

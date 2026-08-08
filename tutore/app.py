@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlmodel import select
 
-from . import anki, cards, db, llm, memory, stt, tts
+from . import anki, cards, db, llm, memory, scenarios, stt, tts
 from .config import ANKI_DECK, APP_NAME, HOST, NATIVE, PORT, TARGET, TUTOR_NAME, WEB_DIR
 
 app = FastAPI(title=f"{APP_NAME} — {TARGET.name_en} voice tutor")
@@ -103,6 +103,7 @@ async def post_turn(
     mode: str = Form("immersion"),
     level: str = Form(""),
     length: str = Form("medium"),
+    scenario_id: str = Form(""),
     session_id: int = Form(0),
 ) -> JSONResponse:
     # 1) Persist upload to a temp file (ffmpeg/whisper read from disk).
@@ -148,13 +149,16 @@ async def post_turn(
     # 3) Text -> tutor (structured JSON).
     sid = session_id or 0
     history = _HISTORY.setdefault(sid, [])
+    scenario = scenarios.get(scenario_id) if mode == "scenario" else None
     result = llm.run_turn(
         mode=mode,
         level=effective_level,
-        profile_block=memory.profile_block(),
+        # Role-play stays in character; skip the learner-profile injection.
+        profile_block="" if scenario else memory.profile_block(),
         history=history,
         user_text=tr.text,
         length=length,
+        scenario=scenario,
     )
 
     # Update rolling history.
@@ -168,7 +172,12 @@ async def post_turn(
         transcript=tr.text,
         stt_confidence=tr.confidence,
         result=result,
+        mode=mode,
     )
+
+    # Scenario: stamp completion the first time the goal is met.
+    if scenario and result.goal_met:
+        _complete_scenario_run(sid or None, scenario.id)
 
     # 5) Reply -> speech.
     t1 = time.perf_counter()
@@ -187,6 +196,7 @@ async def post_turn(
             "detected_level": result.detected_level,
             "corrections": [c.__dict__ for c in result.corrections],
             "new_vocab": [v.__dict__ for v in result.new_vocab],
+            "goal_met": result.goal_met,
             "audio_b64": base64.b64encode(wav).decode("ascii"),
             "timings": timings,
         }
@@ -351,6 +361,85 @@ def list_vocab(limit: int = 100) -> dict:
             for r in rows
         ]
     return {"vocab": out}
+
+
+# ----------------------------------------------------------------------------
+# Phase 3: scenario role-plays
+# ----------------------------------------------------------------------------
+
+
+def _completed_scenario_ids() -> set[str]:
+    with db.get_session() as s:
+        rows = s.exec(select(db.ScenarioRun).where(db.ScenarioRun.completed_at.is_not(None))).all()
+        return {r.scenario_id for r in rows}
+
+
+def _complete_scenario_run(session_id: int | None, scenario_id: str) -> None:
+    with db.get_session() as s:
+        q = (
+            select(db.ScenarioRun)
+            .where(db.ScenarioRun.scenario_id == scenario_id)
+            .where(db.ScenarioRun.completed_at.is_(None))
+            .order_by(db.ScenarioRun.started_at.desc())
+        )
+        if session_id:
+            q = q.where(db.ScenarioRun.session_id == session_id)
+        run = s.exec(q).first()
+        if run is not None:
+            run.completed_at = memory._now()
+            s.add(run)
+            s.commit()
+
+
+@app.get("/api/scenarios")
+def list_scenarios() -> dict:
+    done = _completed_scenario_ids()
+    return {
+        "scenarios": [
+            {
+                "id": sc.id, "emoji": sc.emoji, "title": sc.title,
+                "setting": sc.setting, "character": sc.character, "goal": sc.goal,
+                "completed": sc.id in done,
+            }
+            for sc in scenarios.SCENARIOS
+        ]
+    }
+
+
+class ScenarioStart(BaseModel):
+    scenario_id: str
+    session_id: int = 0
+    level: str = ""
+    length: str = "medium"
+
+
+@app.post("/api/scenario/start")
+def start_scenario(body: ScenarioStart) -> JSONResponse:
+    scenario = scenarios.get(body.scenario_id)
+    if scenario is None:
+        return JSONResponse({"error": "unknown scenario"}, status_code=404)
+
+    profile = memory.get_profile()
+    level = body.level or profile.level
+    result = llm.opening_line(scenario, level, length=body.length)
+
+    # Fresh role-play history: the opening line is the assistant's first message.
+    sid = body.session_id or 0
+    _HISTORY[sid] = [{"role": "assistant", "content": result.reply}]
+
+    with db.get_session() as s:
+        s.add(db.ScenarioRun(scenario_id=scenario.id, session_id=sid or None))
+        s.commit()
+
+    wav = tts.synthesize(result.reply, lang=result.reply_lang or TARGET.code, speed=profile.tts_speed)
+    return JSONResponse(
+        {
+            "scenario_id": scenario.id,
+            "reply": result.reply,
+            "reply_lang": result.reply_lang,
+            "audio_b64": base64.b64encode(wav).decode("ascii"),
+        }
+    )
 
 
 # Static web UI (mounted last so /api/* wins).

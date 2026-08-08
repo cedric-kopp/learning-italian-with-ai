@@ -14,11 +14,20 @@ import datetime as dt
 import json
 import re
 from collections import Counter
+from pathlib import Path
 
 from sqlmodel import select
 
 from . import db
-from .config import ROOT, TARGET, TUTOR_NAME
+from .config import (
+    LLM,
+    NATIVE,
+    ROOT,
+    SAVE_TRANSCRIPTS,
+    TARGET,
+    TRANSCRIPTS_DIR,
+    TUTOR_NAME,
+)
 from .db import Mistake, Profile, Turn, Vocab
 from .llm import TurnResult
 
@@ -250,12 +259,14 @@ def persist_turn(
     transcript: str,
     stt_confidence: float | None,
     result: TurnResult,
+    mode: str = "",
 ) -> None:
     """Save the turn and harvest vocab + mistakes into long-term memory."""
     with db.get_session() as s:
         s.add(
             Turn(
                 session_id=session_id,
+                mode=mode,
                 transcript=transcript,
                 stt_confidence=stt_confidence,
                 tutor_reply=result.reply,
@@ -283,3 +294,140 @@ def persist_turn(
         # the big model at session end (see cards.curate_and_generate).
 
         s.commit()
+
+    # Mirror the full session to a gitignored log file for later quality review.
+    # Rewritten every turn so it always reflects the whole sitting, no matter how
+    # the session ends (tab close, refresh, etc.). Best-effort — never break a turn.
+    if session_id:
+        try:
+            save_session_log(session_id)
+        except Exception as e:  # pragma: no cover - logging must not break a turn
+            print(f"[transcript] save failed for session {session_id}: {e}", flush=True)
+
+
+def _fmt_dt(value: dt.datetime | None) -> str:
+    """Format a stored datetime as 'YYYY-MM-DD HH:MM:SS UTC' (SQLite may hand back
+    naive datetimes; treat those as UTC)."""
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+_MODE_LABEL = {
+    "immersion": "immersion",
+    "english_teacher": "teacher",
+    "scenario": "role-play",
+}
+
+
+def save_session_log(session_id: int) -> Path | None:
+    """Write a session's full conversation to transcripts/ as both a readable
+    Markdown log and a structured JSON dump (for future automated evaluation).
+
+    Returns the Markdown path, or None if disabled / the session has no turns.
+    """
+    if not SAVE_TRANSCRIPTS or not session_id:
+        return None
+
+    with db.get_session() as s:
+        turns = s.exec(
+            select(Turn).where(Turn.session_id == session_id).order_by(Turn.created_at.asc())
+        ).all()
+    if not turns:
+        return None
+
+    started = turns[0].created_at
+    if started is not None and started.tzinfo is None:
+        started = started.replace(tzinfo=dt.timezone.utc)
+    stamp = (started or _now()).astimezone(dt.timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+    base = f"{stamp}_session-{session_id}"
+
+    # --- structured JSON (for programmatic review / eval) ---
+    turn_records = []
+    for i, t in enumerate(turns, 1):
+        try:
+            corrections = json.loads(t.corrections_json or "[]")
+        except (ValueError, TypeError):
+            corrections = []
+        turn_records.append(
+            {
+                "n": i,
+                "at": _fmt_dt(t.created_at),
+                "mode": t.mode or "",
+                "stt_confidence": t.stt_confidence,
+                "learner": t.transcript,
+                "tutor": t.tutor_reply,
+                "corrections": corrections,
+            }
+        )
+
+    meta = {
+        "session_id": session_id,
+        "started_at": _fmt_dt(started),
+        "saved_at": _fmt_dt(_now()),
+        "target_lang": {"code": TARGET.code, "name": TARGET.name_en},
+        "native_lang": {"code": NATIVE.code, "name": NATIVE.name_en},
+        "tutor_name": TUTOR_NAME,
+        "backend": LLM.backend,
+        "model": LLM.model,
+        "num_turns": len(turns),
+    }
+
+    TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    (TRANSCRIPTS_DIR / f"{base}.json").write_text(
+        json.dumps({**meta, "turns": turn_records}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # --- human-readable Markdown ---
+    md = [
+        f"# {TUTOR_NAME} session log",
+        "",
+        f"- **Session:** {session_id}",
+        f"- **Started:** {meta['started_at']}",
+        f"- **Language:** {TARGET.name_en} (explanations in {NATIVE.name_en})",
+        f"- **Tutor:** {TUTOR_NAME}",
+        f"- **Backend:** {LLM.backend} · {LLM.model}",
+        f"- **Turns:** {len(turns)}",
+        "",
+        "---",
+        "",
+    ]
+    for rec in turn_records:
+        head = f"### Turn {rec['n']} · {rec['at']}"
+        label = _MODE_LABEL.get(rec["mode"], rec["mode"])
+        if label:
+            head += f" · {label}"
+        if rec["stt_confidence"] is not None:
+            head += f" · clarity ~{round(rec['stt_confidence'] * 100)}%"
+        md.append(head)
+        md.append("")
+        md.append(f"**You:** {rec['learner'] or '_(nothing heard)_'}")
+        md.append("")
+        md.append(f"**{TUTOR_NAME}:** {rec['tutor']}")
+        if rec["corrections"]:
+            md.append("")
+            md.append("_Corrections:_")
+            for c in rec["corrections"]:
+                was = c.get("your_text") or ""
+                fix = c.get("correction") or ""
+                why = c.get("explanation") or ""
+                tag = c.get("tag") or ""
+                line = "- "
+                if was:
+                    line += f"~~{was}~~ → "
+                line += f"**{fix}**"
+                if why:
+                    line += f" — {why}"
+                if tag:
+                    line += f" `[{tag}]`"
+                md.append(line)
+        md.append("")
+        md.append("---")
+        md.append("")
+
+    md_path = TRANSCRIPTS_DIR / f"{base}.md"
+    md_path.write_text("\n".join(md), encoding="utf-8")
+    return md_path

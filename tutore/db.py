@@ -50,6 +50,7 @@ class Turn(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: Optional[int] = Field(default=None, foreign_key="session.id", index=True)
     created_at: dt.datetime = Field(default_factory=_now)
+    mode: str = ""  # "immersion" | "english_teacher" | "scenario" (for transcript review)
     transcript: str = ""  # what Whisper heard (pronunciation signal)
     stt_confidence: Optional[float] = None  # avg logprob proxy, higher = clearer
     tutor_reply: str = ""
@@ -89,6 +90,16 @@ class Mistake(SQLModel, table=True):
     correction: str = ""
     explanation: str = ""
     tag: str = ""  # e.g. "passato_prossimo_aux", "prep_di_vs_a"
+
+
+class ScenarioRun(SQLModel, table=True):
+    """A role-play session for a scenario (Phase 3). completed_at set on goal_met."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scenario_id: str = Field(index=True)
+    session_id: Optional[int] = Field(default=None, index=True)
+    started_at: dt.datetime = Field(default_factory=_now)
+    completed_at: Optional[dt.datetime] = None
 
 
 class Document(SQLModel, table=True):

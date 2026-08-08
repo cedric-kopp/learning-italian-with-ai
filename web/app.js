@@ -151,7 +151,8 @@ async function handleRecording() {
 
   const fd = new FormData();
   fd.append("audio", blob, "speech.webm");
-  fd.append("mode", $("#mode").value);
+  fd.append("mode", state.scenario ? "scenario" : $("#mode").value);
+  if (state.scenario) fd.append("scenario_id", state.scenario.id);
   fd.append("level", $("#level").value);
   fd.append("length", state.length);
   fd.append("session_id", String(state.sessionId));
@@ -202,6 +203,7 @@ function renderTurn(data) {
   node.querySelector(".replay").addEventListener("click", () => audio && audio.play());
 
   log.appendChild(node);
+  if (state.scenario && data.goal_met) markScenarioComplete();
   log.scrollTop = log.scrollHeight;
 }
 
@@ -331,3 +333,98 @@ $("#importVocab").addEventListener("click", async () => {
     out.textContent = "Error: " + (err.message || err);
   }
 });
+
+// ---- Scenario role-plays ----
+const scenarioPanel = $("#scenarioPanel");
+$("#scenarioBtn").addEventListener("click", async () => {
+  scenarioPanel.showModal();
+  await loadScenarios();
+});
+
+async function loadScenarios() {
+  const list = $("#scenarioList");
+  list.innerHTML = "<span class='muted'>Loading…</span>";
+  try {
+    const { scenarios } = await (await fetch("/api/scenarios")).json();
+    list.innerHTML = "";
+    scenarios.forEach((sc) => {
+      const card = document.createElement("button");
+      card.className = "scenario-card";
+      card.innerHTML =
+        `<div class="sc-title">${sc.emoji} ${escapeHtml(sc.title)}</div>` +
+        `<div class="sc-goal">${escapeHtml(sc.goal)}</div>` +
+        (sc.completed ? `<div class="sc-done">✓ completed</div>` : "");
+      card.addEventListener("click", () => startScenario(sc));
+      list.appendChild(card);
+    });
+  } catch {
+    list.innerHTML = "<span class='muted'>Could not load scenarios.</span>";
+  }
+}
+
+async function startScenario(sc) {
+  scenarioPanel.close();
+  setBusy(true, `Starting: ${sc.title}…`);
+  try {
+    const res = await fetch("/api/scenario/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenario_id: sc.id,
+        session_id: state.sessionId,
+        level: $("#level").value,
+        length: state.length,
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    state.scenario = sc;
+    showScenarioBar(sc);
+    $("#hint")?.remove();
+    appendCharacterLine(data.reply, data.audio_b64);
+  } catch (err) {
+    setStatus("Error: " + (err.message || err));
+    state.scenario = null;
+  } finally {
+    setBusy(false);
+  }
+}
+
+function showScenarioBar(sc) {
+  const bar = $("#scenarioBar");
+  bar.classList.remove("done");
+  $("#sbTitle").textContent = `${sc.emoji} ${sc.title}`;
+  $("#sbGoal").textContent = `Goal: ${sc.goal}`;
+  bar.hidden = false;
+}
+
+$("#exitScenario").addEventListener("click", () => {
+  state.scenario = null;
+  $("#scenarioBar").hidden = true;
+});
+
+function markScenarioComplete() {
+  const bar = $("#scenarioBar");
+  bar.classList.add("done");
+  $("#sbTitle").textContent = `✓ ${state.scenario.emoji} ${state.scenario.title}`;
+  const banner = document.createElement("div");
+  banner.className = "scenario-success";
+  banner.textContent = "🎉 Goal accomplished! Exit to go back, or keep chatting.";
+  log.appendChild(banner);
+}
+
+// Render the character's line as a tutor-style card (no "you said").
+function appendCharacterLine(reply, audioB64) {
+  const wrap = document.createElement("div");
+  wrap.className = "turn";
+  wrap.innerHTML =
+    `<div class="marco" style="border-top:none;padding-top:0">` +
+    `<div class="who tutor-name">${escapeHtml(state.tutorName)}</div>` +
+    `<div class="reply"></div>` +
+    `<button class="replay" title="Replay audio">▶ Replay</button></div>`;
+  wrap.querySelector(".reply").textContent = reply || "";
+  const audio = playAudio(audioB64);
+  wrap.querySelector(".replay").addEventListener("click", () => audio && audio.play());
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+}

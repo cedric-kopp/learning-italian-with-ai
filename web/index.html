@@ -14,11 +14,30 @@
     </div>
     <div class="topbar-right">
       <div class="backend" id="backend" title="Active LLM backend">…</div>
+      <button id="scenarioBtn" class="anki-btn" title="Role-play scenarios">🎭 Scenarios</button>
       <button id="ankiBtn" class="anki-btn" title="Anki flashcards">
         <span class="dot" id="ankiDot" aria-hidden="true"></span> 🗂 Anki
       </button>
     </div>
   </header>
+
+  <dialog id="scenarioPanel" class="panel">
+    <form method="dialog" class="panel-head">
+      <h2>🎭 Role-play scenarios</h2>
+      <button class="x" aria-label="Close">✕</button>
+    </form>
+    <section class="panel-sec">
+      <p class="muted">Pick a real-life situation. The tutor plays the other person
+        and you win when you accomplish the goal — all spoken, in your target language.</p>
+      <div id="scenarioList" class="scenario-list"></div>
+    </section>
+  </dialog>
+
+  <div id="scenarioBar" class="scenario-bar" hidden>
+    <span class="sb-title" id="sbTitle"></span>
+    <span class="sb-goal" id="sbGoal"></span>
+    <button id="exitScenario" class="sb-exit">Exit</button>
+  </div>
 
   <dialog id="ankiPanel" class="panel">
     <form method="dialog" class="panel-head">

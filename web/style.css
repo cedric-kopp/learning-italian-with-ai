@@ -160,3 +160,32 @@ kbd {
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(205,33,42,.5); } 50% { box-shadow: 0 0 0 12px rgba(205,33,42,0); } }
 .mic-icon { font-size: 20px; }
 .status { font-size: 13px; color: var(--muted); min-height: 18px; }
+
+/* --- Scenario role-plays --- */
+.scenario-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 520px) { .scenario-list { grid-template-columns: 1fr; } }
+.scenario-card {
+  text-align: left; font: inherit; cursor: pointer; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--ink);
+}
+.scenario-card:hover { border-color: var(--accent); }
+.scenario-card .sc-title { font-weight: 600; }
+.scenario-card .sc-goal { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.scenario-card .sc-done { font-size: 12px; color: var(--good); margin-top: 4px; }
+
+.scenario-bar {
+  display: flex; align-items: center; gap: 10px; padding: 9px 18px;
+  background: rgba(37,99,235,.09); border-bottom: 1px solid var(--line);
+}
+.scenario-bar.done { background: rgba(0,140,69,.12); }
+.sb-title { font-weight: 600; white-space: nowrap; }
+.sb-goal { color: var(--muted); font-size: 13px; flex: 1; }
+.sb-exit {
+  font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); border-radius: 8px; padding: 4px 12px;
+}
+.sb-exit:hover { border-color: var(--it-red); color: var(--it-red); }
+.scenario-success {
+  align-self: center; background: rgba(0,140,69,.1); border: 1px solid rgba(0,140,69,.3);
+  color: var(--good); border-radius: 999px; padding: 8px 18px; font-weight: 600;
+}
